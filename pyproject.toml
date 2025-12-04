@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ActMix"
+version = "0.1.0"
+description = "Recovering Tabular Inductive Bias via Adaptive Activation Topology"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Turgay Bulut", email = "turgay.bulut@ozu.edu.tr" },
+    { name = "Tamerlan Hajiyev", email = "tamerlan.hajiyev@ozu.edu.tr" },
+    { name = "Kaan Büyükkıvanç", email = "kaan.buyukkivanc@ozu.edu.tr" },
+]
+dependencies = [
+    "torch",
+    "lightning",
+    "hydra-core",
+    "omegaconf",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "matplotlib",
+    "seaborn",
+    "tensorboard",
+    "ucimlrepo",
+    "rich",
+    "xgboost",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 88
+indent-width = 4
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP"]
+ignore = ["N803", "N806", "N812"]
+
+[dependency-groups]
+dev = ["ruff"]

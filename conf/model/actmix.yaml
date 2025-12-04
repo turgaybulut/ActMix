@@ -1,0 +1,16 @@
+name: actmix
+
+_target_: src.models.actmix_mlp.ActMixMLP
+
+hidden_dims:
+  - 128
+  - 128
+
+basis_functions:
+  - sin
+  - tanh
+  - relu
+  - identity
+
+dropout_rate: 0.1
+relu_bias: 1.5

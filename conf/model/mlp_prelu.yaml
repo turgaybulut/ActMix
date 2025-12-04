@@ -1,0 +1,9 @@
+name: mlp_prelu
+
+_target_: src.models.baselines.PReLUMLP
+
+hidden_dims:
+  - 128
+  - 128
+
+dropout_rate: 0.1

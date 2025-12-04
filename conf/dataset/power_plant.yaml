@@ -1,0 +1,13 @@
+name: power_plant
+
+_target_: src.datamodules.uci_regression.PowerPlantDataModule
+
+batch_size: 128
+num_workers: 2
+val_split: 0.10
+test_split: 0.10
+seed: ${seed}
+
+task: regression
+input_dim: 4
+output_dim: 1

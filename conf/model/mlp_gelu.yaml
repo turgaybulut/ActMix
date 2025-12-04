@@ -1,0 +1,9 @@
+name: mlp_gelu
+
+_target_: src.models.baselines.GeLUMLP
+
+hidden_dims:
+  - 128
+  - 128
+
+dropout_rate: 0.1
