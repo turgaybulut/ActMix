@@ -9,7 +9,6 @@ experiment_name: ${model.name}_${dataset.name}
 
 paths:
   root_dir: .
-  data_dir: ${paths.root_dir}/data
   experiment_dir: ${paths.root_dir}/experiments/${experiment_name}
   log_dir: ${paths.experiment_dir}/logs
   checkpoint_dir: ${paths.experiment_dir}/checkpoints
