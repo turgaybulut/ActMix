@@ -42,10 +42,11 @@ class ActMixLayer(nn.Module):
         self.register_buffer("temperature", torch.tensor(1.0))
 
     def _initialize_weights(self, relu_bias: float) -> None:
-        nn.init.zeros_(self.mixing_weights)
-        relu_index = self._get_basis_index("relu")
-        if relu_index is not None and relu_bias != 0.0:
-            self.mixing_weights[:, relu_index].fill_(relu_bias)
+        with torch.no_grad():
+            self.mixing_weights.zero_()
+            relu_index = self._get_basis_index("relu")
+            if relu_index is not None and relu_bias != 0.0:
+                self.mixing_weights[:, relu_index].fill_(relu_bias)
 
     def _get_basis_index(self, name: str) -> int | None:
         try:
