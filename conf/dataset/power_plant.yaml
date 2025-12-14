@@ -1,7 +1,5 @@
 name: power_plant
 
-_target_: src.datamodules.uci_regression.PowerPlantDataModule
-
 batch_size: 128
 num_workers: 2
 val_split: 0.10

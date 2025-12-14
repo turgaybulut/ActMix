@@ -1,6 +1,4 @@
-name: actmix
-
-_target_: src.models.actmix_mlp.ActMixMLP
+name: mlp_actmix
 
 hidden_dims:
   - 128
@@ -13,4 +11,5 @@ basis_functions:
   - identity
 
 dropout_rate: 0.1
-relu_bias: 1.5
+relu_bias: 0.0
+omega_0: 1.0

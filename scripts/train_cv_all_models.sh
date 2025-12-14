@@ -13,19 +13,21 @@ SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 show_usage() {
-    echo -e "${CYAN}Usage: $0 [dataset]${NC}"
+    echo -e "${CYAN}Usage: $0 [dataset] [cv_folds]${NC}"
     echo -e "${BLUE}Available datasets: power_plant, adult_census, magic_gamma${NC}"
     echo -e "${BLUE}Default dataset: power_plant${NC}"
+    echo -e "${BLUE}Default cv_folds: 10${NC}"
     echo -e "${YELLOW}Example: $0 power_plant${NC}"
-    echo -e "${YELLOW}Example: $0 adult_census${NC}"
+    echo -e "${YELLOW}Example: $0 adult_census 5${NC}"
 }
 
-if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     show_usage
     exit 0
 fi
 
 DATASET="${1:-power_plant}"
+CV_FOLDS="${2:-10}"
 
 VALID_DATASETS=("power_plant" "adult_census" "magic_gamma")
 if [[ ! " ${VALID_DATASETS[@]} " =~ " ${DATASET} " ]]; then
@@ -36,22 +38,24 @@ fi
 
 cd "$PROJECT_ROOT"
 
-MODELS=("actmix" "mlp_relu" "mlp_gelu" "mlp_prelu")
+MODELS=("mlp_actmix" "mlp_relu" "mlp_gelu" "mlp_prelu")
 
-echo -e "${CYAN}Starting training pipeline for all models with $DATASET dataset${NC}"
-echo -e "${BLUE}Models to train: ${MODELS[*]}${NC}"
+echo -e "${CYAN}Starting Cross-Validation pipeline for all models with $DATASET dataset${NC}"
+echo -e "${BLUE}Models to evaluate: ${MODELS[*]}${NC}"
+echo -e "${BLUE}Folds: ${CV_FOLDS}${NC}"
 echo -e "${YELLOW}=======================================================================================${NC}"
 
 for model in "${MODELS[@]}"; do
-    echo -e "${BLUE}Running ${YELLOW}$model${BLUE} with $DATASET dataset...${NC}"
+    echo -e "${BLUE}Running ${YELLOW}$model${BLUE} Cross-Validation on $DATASET...${NC}"
 
-    uv run python "$PROJECT_ROOT/scripts/train.py" \
+    uv run python "$PROJECT_ROOT/scripts/train_cv.py" \
         dataset="$DATASET" \
         model="$model" \
-        seed=1192
+        seed=1192 \
+        cv_folds="$CV_FOLDS"
 
-    echo -e "${GREEN}Completed $model training.${NC}"
+    echo -e "${GREEN}Completed $model CV.${NC}"
     echo -e "${YELLOW}=======================================================================================${NC}"
 done
 
-echo -e "${GREEN}All models trained successfully with $DATASET dataset.${NC}"
+echo -e "${GREEN}All models evaluated successfully with $DATASET dataset.${NC}"

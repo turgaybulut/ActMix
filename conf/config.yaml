@@ -1,11 +1,13 @@
 defaults:
-  - model: actmix
+  - base_config
+  - model: mlp_actmix
   - dataset: power_plant
   - training: default
   - _self_
 
 seed: 1192
-experiment_name: ${model.name}_${dataset.name}
+experiment_name: ${model.name}-${dataset.name}
+cv_folds: 10
 
 paths:
   root_dir: .

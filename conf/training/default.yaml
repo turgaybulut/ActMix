@@ -5,11 +5,11 @@ weight_decay: 1.0e-4
 
 temperature:
   initial: 1.0
-  final: 1.0e-2
+  final: 1.0 # disabled, 1.0e-2
   anneal_epochs: 150
 
 entropy_regularization:
-  lambda_max: 1.0e-2
+  lambda_max: 0.0 # disabled, 1.0e-2
   warmup_epochs: 50
 
 early_stopping:

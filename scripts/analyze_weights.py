@@ -1,22 +1,24 @@
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch
+import torch.nn.functional as F
 from omegaconf import OmegaConf
 
 from src.models import ActMixMLP
 from src.models.layers import ActMixLayer
-from src.system import ActMixSystem
+from src.trainer import TabularTrainer
 
 
-def load_config(config_path: Path):
+def load_config(config_path: Path) -> dict:
     return OmegaConf.load(config_path)
 
 
-def create_model_from_config(config) -> ActMixMLP:
+def create_model_from_config(config: dict) -> ActMixMLP:
     model_conf = config.model
     dataset_conf = config.dataset
 
@@ -27,58 +29,72 @@ def create_model_from_config(config) -> ActMixMLP:
         basis_functions=list(model_conf.basis_functions),
         dropout_rate=model_conf.get("dropout_rate", 0.0),
         relu_bias=model_conf.get("relu_bias", 1.5),
+        omega_0=model_conf.get("omega_0", 1.0),
     )
 
 
-def load_model_from_checkpoint(checkpoint_path: str) -> ActMixMLP:
-    chkpt_path = Path(checkpoint_path)
-    exp_dir = chkpt_path.parent.parent
-    config_path = exp_dir / "logs" / ".hydra" / "config.yaml"
+def load_model_from_checkpoint(checkpoint_path: Path) -> ActMixMLP:
+    current_dir = checkpoint_path.parent
+    config_path = None
 
-    assert config_path.exists()
+    for _ in range(4):
+        possible_config = current_dir / "config.yaml"
+        if possible_config.exists():
+            config_path = possible_config
+            break
+
+        possible_hydra_config = current_dir / "logs" / ".hydra" / "config.yaml"
+        if possible_hydra_config.exists():
+            config_path = possible_hydra_config
+            break
+
+        current_dir = current_dir.parent
+
+        if current_dir == current_dir.parent:
+            break
+
+    assert config_path is not None and config_path.exists(), (
+        f"Config not found strictly above {checkpoint_path}"
+    )
 
     config = load_config(config_path)
     model = create_model_from_config(config)
 
-    system = ActMixSystem.load_from_checkpoint(checkpoint_path, model=model)
-    return system.model
+    trainer = TabularTrainer.load_from_checkpoint(str(checkpoint_path), model=model)
+    return trainer.model
 
 
 def extract_actmix_layers(model: ActMixMLP) -> list[tuple[str, ActMixLayer]]:
-    actmix_layers = []
-    for name, module in model.named_modules():
-        if isinstance(module, ActMixLayer):
-            actmix_layers.append((name, module))
-    return actmix_layers
+    return [
+        (name, module)
+        for name, module in model.named_modules()
+        if isinstance(module, ActMixLayer)
+    ]
 
 
 def get_mixing_coefficients(layer: ActMixLayer) -> np.ndarray:
     with torch.no_grad():
-        coefficients = layer.get_mixing_coefficients()
-        return coefficients.cpu().numpy()
+        return layer.get_mixing_coefficients().cpu().numpy()
 
 
 def get_entropy_per_neuron(layer: ActMixLayer) -> np.ndarray:
     with torch.no_grad():
         coefficients = layer.get_mixing_coefficients()
-        entropy = -torch.sum(coefficients * torch.log(coefficients + 1e-10), dim=-1)
+        log_coefficients = torch.log(coefficients + 1e-10)
+        entropy = -torch.sum(coefficients * log_coefficients, dim=-1)
         return entropy.cpu().numpy()
 
 
-def compute_layer_statistics(layer: ActMixLayer) -> dict[str, float]:
+def compute_layer_statistics(layer: ActMixLayer) -> dict[str, float | dict | list]:
     coefficients = get_mixing_coefficients(layer)
     entropy = get_entropy_per_neuron(layer)
 
     dominant_indices = np.argmax(coefficients, axis=-1)
-    basis_function_names = layer.basis_function_names
+    basis_names = layer.basis_function_names
 
-    dominance_counts = {}
-    for name in basis_function_names:
-        dominance_counts[name] = 0
-
+    dominance_counts = {name: 0 for name in basis_names}
     for idx in dominant_indices:
-        name = basis_function_names[idx]
-        dominance_counts[name] += 1
+        dominance_counts[basis_names[idx]] += 1
 
     return {
         "mean_entropy": float(np.mean(entropy)),
@@ -87,6 +103,8 @@ def compute_layer_statistics(layer: ActMixLayer) -> dict[str, float]:
         "max_entropy": float(np.max(entropy)),
         "dominance_counts": dominance_counts,
         "num_neurons": len(dominant_indices),
+        "basis_mass": np.sum(coefficients, axis=0).tolist(),
+        "max_alphas": np.max(coefficients, axis=-1).tolist(),
     }
 
 
@@ -168,68 +186,170 @@ def plot_coefficient_bar_per_neuron(
     layer: ActMixLayer,
     layer_name: str,
     output_dir: Path,
-    max_neurons: int = 20,
 ) -> None:
     coefficients = get_mixing_coefficients(layer)
+    entropy = get_entropy_per_neuron(layer)
     basis_names = layer.basis_function_names
 
-    num_neurons_to_plot = min(max_neurons, coefficients.shape[0])
+    sorted_indices = np.argsort(entropy)
+    selected_indices = np.concatenate([sorted_indices[:3], sorted_indices[-3:]])
 
+    num_plots = len(selected_indices)
     fig, axes = plt.subplots(
-        num_neurons_to_plot,
+        num_plots,
         1,
-        figsize=(8, 2 * num_neurons_to_plot),
+        figsize=(8, 2 * num_plots),
         sharex=True,
     )
 
-    if num_neurons_to_plot == 1:
-        axes = [axes]
+    for i, neuron_idx in enumerate(selected_indices):
+        ax = axes[i]
+        ax.bar(basis_names, coefficients[neuron_idx])
 
-    for i, ax in enumerate(axes):
-        ax.bar(basis_names, coefficients[i])
-        ax.set_ylabel(f"N{i}")
+        label_type = (
+            "Low Entropy" if neuron_idx in sorted_indices[:3] else "High Entropy"
+        )
+        ax.set_ylabel(f"N{neuron_idx}\n({label_type})")
         ax.set_ylim(0, 1)
 
     plt.xlabel("Basis Function")
-    fig.suptitle(f"Mixing Coefficients per Neuron - {layer_name}")
+    fig.suptitle(f"Mixing Coefficients (Extreme Entropy Neurons) - {layer_name}")
     plt.tight_layout()
     plt.savefig(output_dir / f"{layer_name}_coefficients_bar.png", dpi=150)
     plt.close()
 
 
-def generate_report(
-    model: ActMixMLP,
+def plot_effective_activation_functions(
+    layer: ActMixLayer,
+    layer_name: str,
     output_dir: Path,
-) -> str:
-    layers = extract_actmix_layers(model)
+) -> None:
+    coefficients = get_mixing_coefficients(layer)
+    entropy = get_entropy_per_neuron(layer)
+    basis_names = layer.basis_function_names
 
-    report_lines = ["# ActMix Weight Analysis Report", ""]
+    sorted_indices = np.argsort(entropy)
+    lowest_entropy_indices = sorted_indices[:3]
+    highest_entropy_indices = sorted_indices[-3:]
+    selected_indices = np.concatenate([lowest_entropy_indices, highest_entropy_indices])
+
+    x = torch.linspace(-5, 5, 200)
+
+    plt.figure(figsize=(12, 8))
+
+    for neuron_idx in selected_indices:
+        coeffs = torch.from_numpy(coefficients[neuron_idx])
+        y = torch.zeros_like(x)
+
+        for k, name in enumerate(basis_names):
+            if name == "sin":
+                basis_y = torch.sin(layer.omega_0 * x)
+            elif name == "tanh":
+                basis_y = torch.tanh(x)
+            elif name == "relu":
+                basis_y = F.relu(x)
+            elif name == "identity":
+                basis_y = x
+            elif name == "sigmoid":
+                basis_y = torch.sigmoid(x)
+            elif name == "silu":
+                basis_y = F.silu(x)
+            else:
+                basis_y = x
+
+            y += coeffs[k] * basis_y
+
+        label_type = (
+            "High Entropy" if neuron_idx in highest_entropy_indices else "Low Entropy"
+        )
+        plt.plot(x.numpy(), y.numpy(), label=f"N{neuron_idx} ({label_type})")
+
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.title(f"Effective Activation Functions - {layer_name}")
+    plt.xlabel("Input (x)")
+    plt.ylabel("Output (y)")
+    plt.tight_layout()
+    plt.savefig(output_dir / f"{layer_name}_effective_activations.png", dpi=150)
+    plt.close()
+
+
+def plot_layer_topology_evolution(
+    all_statistics: dict,
+    output_dir: Path,
+) -> None:
+    layer_names = list(all_statistics.keys())
+    basis_names = list(all_statistics[layer_names[0]]["dominance_counts"].keys())
+
+    mass_data = {name: [] for name in basis_names}
+
+    for layer in layer_names:
+        mass = all_statistics[layer]["basis_mass"]
+        for i, name in enumerate(basis_names):
+            mass_data[name].append(mass[i])
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bottom = np.zeros(len(layer_names))
+
+    for name in basis_names:
+        values = np.array(mass_data[name])
+        ax.bar(layer_names, values, bottom=bottom, label=name)
+        bottom += values
+
+    plt.xlabel("Layer")
+    plt.ylabel("Total Mixing Coefficient Mass")
+    plt.title("Layer-wise Topology Evolution")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_dir / "layer_topology_evolution.png", dpi=150)
+    plt.close()
+
+
+def plot_specialization_spectrum(
+    all_max_alphas: list[float],
+    output_dir: Path,
+) -> None:
+    plt.figure(figsize=(10, 6))
+    plt.hist(all_max_alphas, bins=50, range=(0, 1), edgecolor="black", alpha=0.7)
+    plt.axvline(0.25, color="red", linestyle="--", label="Mean-Field (0.25)")
+    plt.axvline(1.0, color="green", linestyle="--", label="Specialized (1.0)")
+
+    plt.xlabel("Max Mixing Coefficient")
+    plt.ylabel("Count")
+    plt.title("Neuron Specialization Spectrum (All Layers)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_dir / "specialization_spectrum.png", dpi=150)
+    plt.close()
+
+
+def generate_report(model: ActMixMLP, output_dir: Path) -> dict:
+    layers = extract_actmix_layers(model)
+    all_statistics = {}
+    all_max_alphas = []
 
     for layer_name, layer in layers:
+        safe_name = layer_name.replace(".", "_")
         statistics = compute_layer_statistics(layer)
+        all_statistics[layer_name] = statistics
+        all_max_alphas.extend(statistics["max_alphas"])
 
-        report_lines.append(f"## Layer: {layer_name}")
-        report_lines.append("")
-        report_lines.append(f"- Number of neurons: {statistics['num_neurons']}")
-        report_lines.append(f"- Mean entropy: {statistics['mean_entropy']:.4f}")
-        report_lines.append(f"- Std entropy: {statistics['std_entropy']:.4f}")
-        report_lines.append(f"- Min entropy: {statistics['min_entropy']:.4f}")
-        report_lines.append(f"- Max entropy: {statistics['max_entropy']:.4f}")
-        report_lines.append("")
-        report_lines.append("### Dominant Basis Function Counts:")
-        for name, count in statistics["dominance_counts"].items():
-            percentage = 100 * count / statistics["num_neurons"]
-            report_lines.append(f"  - {name}: {count} ({percentage:.1f}%)")
-        report_lines.append("")
+        plot_mixing_coefficients_heatmap(layer, safe_name, output_dir)
+        plot_entropy_distribution(layer, safe_name, output_dir)
+        plot_dominance_pie_chart(statistics, safe_name, output_dir)
+        plot_coefficient_bar_per_neuron(layer, safe_name, output_dir)
+        plot_effective_activation_functions(layer, safe_name, output_dir)
 
-        plot_mixing_coefficients_heatmap(
-            layer, layer_name.replace(".", "_"), output_dir
-        )
-        plot_entropy_distribution(layer, layer_name.replace(".", "_"), output_dir)
-        plot_dominance_pie_chart(statistics, layer_name.replace(".", "_"), output_dir)
-        plot_coefficient_bar_per_neuron(layer, layer_name.replace(".", "_"), output_dir)
+    plot_layer_topology_evolution(all_statistics, output_dir)
+    plot_specialization_spectrum(all_max_alphas, output_dir)
 
-    return "\n".join(report_lines)
+    return all_statistics
+
+
+def save_statistics_json(statistics: dict, output_dir: Path) -> None:
+    output_file = output_dir / "layer_statistics.json"
+    with open(output_file, "w") as f:
+        json.dump(statistics, f, indent=2)
 
 
 def main() -> None:
@@ -241,18 +361,14 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model = load_model_from_checkpoint(args.checkpoint)
+    checkpoint_path = Path(args.checkpoint)
+    model = load_model_from_checkpoint(checkpoint_path)
     model.eval()
 
-    report = generate_report(model, output_dir)
-
-    report_path = output_dir / "analysis_report.md"
-    with open(report_path, "w") as f:
-        f.write(report)
+    statistics = generate_report(model, output_dir)
+    save_statistics_json(statistics, output_dir)
 
     print(f"Analysis complete. Results saved to {output_dir}")
-    print("\nReport Summary:")
-    print(report)
 
 
 if __name__ == "__main__":

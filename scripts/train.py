@@ -5,6 +5,7 @@ from typing import Any, Literal
 import hydra
 import lightning as L
 import torch.nn as nn
+from hydra.core.config_store import ConfigStore
 from lightning.pytorch.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
@@ -13,29 +14,12 @@ from lightning.pytorch.callbacks import (
     RichProgressBar,
 )
 from lightning.pytorch.loggers import TensorBoardLogger
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
-from src.datamodules.uci_classification import (
-    AdultCensusDataModule,
-    MagicGammaDataModule,
-)
-from src.datamodules.uci_regression import PowerPlantDataModule
-from src.models.actmix_mlp import ActMixMLP
-from src.models.baselines import GeLUMLP, PReLUMLP, ReLUMLP
-from src.system import ActMixSystem
-
-DATAMODULE_REGISTRY = {
-    "power_plant": PowerPlantDataModule,
-    "adult_census": AdultCensusDataModule,
-    "magic_gamma": MagicGammaDataModule,
-}
-
-MODEL_REGISTRY = {
-    "actmix": ActMixMLP,
-    "mlp_relu": ReLUMLP,
-    "mlp_gelu": GeLUMLP,
-    "mlp_prelu": PReLUMLP,
-}
+from src.config import ExperimentConfig
+from src.datamodules import DATAMODULE_REGISTRY
+from src.models import ActMixMLP, StaticMLP
+from src.trainer import TabularTrainer
 
 
 def create_datamodule(cfg: DictConfig) -> L.LightningDataModule:
@@ -51,30 +35,38 @@ def create_datamodule(cfg: DictConfig) -> L.LightningDataModule:
 
 def create_model(cfg: DictConfig, input_dim: int, output_dim: int) -> nn.Module:
     model_name = cfg.model.name
-    model_class = MODEL_REGISTRY[model_name]
+    hidden_dims = list(cfg.model.hidden_dims)
+    dropout_rate = cfg.model.dropout_rate
 
-    common_kwargs = {
-        "input_dim": input_dim,
-        "output_dim": output_dim,
-        "hidden_dims": list(cfg.model.hidden_dims),
-        "dropout_rate": cfg.model.dropout_rate,
-    }
+    if model_name == "mlp_actmix":
+        return ActMixMLP(
+            input_dim=input_dim,
+            output_dim=output_dim,
+            hidden_dims=hidden_dims,
+            basis_functions=list(cfg.model.basis_functions),
+            dropout_rate=dropout_rate,
+            relu_bias=cfg.model.relu_bias,
+            omega_0=cfg.model.get("omega_0", 1.0),
+        )
 
-    if model_name == "actmix":
-        common_kwargs["basis_functions"] = list(cfg.model.basis_functions)
-        common_kwargs["relu_bias"] = cfg.model.relu_bias
+    activation = cfg.model.get("activation", "relu")
+    return StaticMLP(
+        input_dim=input_dim,
+        output_dim=output_dim,
+        hidden_dims=hidden_dims,
+        activation=activation,
+        dropout_rate=dropout_rate,
+    )
 
-    return model_class(**common_kwargs)
 
-
-def create_system(
+def create_tabular_trainer(
     cfg: DictConfig,
     model: nn.Module,
     task: Literal["regression", "classification"],
-) -> ActMixSystem:
-    is_actmix = cfg.model.name == "actmix"
+) -> TabularTrainer:
+    is_actmix = cfg.model.name == "mlp_actmix"
 
-    return ActMixSystem(
+    return TabularTrainer(
         model=model,
         task=task,
         num_classes=cfg.dataset.output_dim,
@@ -110,18 +102,12 @@ def create_callbacks(cfg: DictConfig) -> list[L.Callback]:
         mode=cfg.training.early_stopping.mode,
     )
 
-    rich_model_summary = RichModelSummary(max_depth=2)
-
-    rich_progress_bar = RichProgressBar(leave=True)
-
-    lr_monitor = LearningRateMonitor(logging_interval="epoch")
-
     return [
         checkpoint_callback,
         early_stopping_callback,
-        rich_model_summary,
-        rich_progress_bar,
-        lr_monitor,
+        RichModelSummary(max_depth=2),
+        RichProgressBar(leave=True),
+        LearningRateMonitor(logging_interval="epoch"),
     ]
 
 
@@ -133,8 +119,10 @@ def create_logger(cfg: DictConfig) -> TensorBoardLogger:
     )
 
 
-def create_trainer(
-    cfg: DictConfig, callbacks: list[L.Callback], logger: TensorBoardLogger
+def create_lightning_trainer(
+    cfg: DictConfig,
+    callbacks: list[L.Callback],
+    logger: TensorBoardLogger,
 ) -> L.Trainer:
     return L.Trainer(
         max_epochs=cfg.training.max_epochs,
@@ -147,8 +135,8 @@ def create_trainer(
     )
 
 
-def save_test_results(test_results: list[Any], cfg: DictConfig) -> None:
-    results_file = Path(cfg.paths.experiment_dir) / "test_results.json"
+def save_experiment_artifacts(cfg: DictConfig, test_results: list[Any]) -> None:
+    experiment_dir = Path(cfg.paths.experiment_dir)
 
     results_payload = {
         "model": cfg.model.name,
@@ -157,12 +145,17 @@ def save_test_results(test_results: list[Any], cfg: DictConfig) -> None:
         "metrics": test_results[0] if test_results else {},
     }
 
+    results_file = experiment_dir / "test_results.json"
     with open(results_file, "w") as f:
         json.dump(results_payload, f, indent=2)
 
+    config_file = experiment_dir / "config.yaml"
+    with open(config_file, "w") as f:
+        OmegaConf.save(cfg, f)
+
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
-def main(cfg: DictConfig) -> None:
+def main(cfg: ExperimentConfig) -> None:
     L.seed_everything(cfg.seed, workers=True)
 
     datamodule = create_datamodule(cfg)
@@ -174,17 +167,21 @@ def main(cfg: DictConfig) -> None:
     task = cfg.dataset.task
 
     model = create_model(cfg, input_dim, output_dim)
-    system = create_system(cfg, model, task)
+    tabular_trainer = create_tabular_trainer(cfg, model, task)
 
     callbacks = create_callbacks(cfg)
     logger = create_logger(cfg)
-    trainer = create_trainer(cfg, callbacks, logger)
+    lightning_trainer = create_lightning_trainer(cfg, callbacks, logger)
 
-    trainer.fit(system, datamodule=datamodule)
-    test_results = trainer.test(system, datamodule=datamodule, ckpt_path="best")
+    lightning_trainer.fit(tabular_trainer, datamodule=datamodule)
+    test_results = lightning_trainer.test(
+        tabular_trainer, datamodule=datamodule, ckpt_path="best"
+    )
 
-    save_test_results(test_results, cfg)
+    save_experiment_artifacts(cfg, test_results)
 
 
 if __name__ == "__main__":
+    cs = ConfigStore.instance()
+    cs.store(name="base_config", node=ExperimentConfig)
     main()
