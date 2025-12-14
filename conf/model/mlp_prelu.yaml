@@ -1,6 +1,5 @@
 name: mlp_prelu
-
-_target_: src.models.baselines.PReLUMLP
+activation: prelu
 
 hidden_dims:
   - 128

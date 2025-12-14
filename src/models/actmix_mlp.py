@@ -9,10 +9,11 @@ class ActMixMLP(nn.Module):
         self,
         input_dim: int,
         output_dim: int,
-        hidden_dims: list[int] = None,
-        basis_functions: list[str] = None,
+        hidden_dims: list[int] | None = None,
+        basis_functions: list[str] | None = None,
         dropout_rate: float = 0.0,
         relu_bias: float = 1.5,
+        omega_0: float = 1.0,
     ) -> None:
         super().__init__()
 
@@ -24,13 +25,17 @@ class ActMixMLP(nn.Module):
         self.hidden_dims = hidden_dims
         self.basis_functions = basis_functions
         self.relu_bias = relu_bias
+        self.omega_0 = omega_0
 
-        layers = []
+        layers: list[nn.Module] = []
+        actmix_layers: list[ActMixLayer] = []
         prev_dim = input_dim
 
         for hidden_dim in hidden_dims:
             layers.append(nn.Linear(prev_dim, hidden_dim))
-            layers.append(ActMixLayer(hidden_dim, basis_functions, relu_bias))
+            actmix = ActMixLayer(hidden_dim, basis_functions, relu_bias, omega_0)
+            layers.append(actmix)
+            actmix_layers.append(actmix)
             if dropout_rate > 0:
                 layers.append(nn.Dropout(dropout_rate))
             prev_dim = hidden_dim
@@ -38,20 +43,24 @@ class ActMixMLP(nn.Module):
         layers.append(nn.Linear(prev_dim, output_dim))
 
         self.network = nn.Sequential(*layers)
-        self.actmix_layers = [
-            layer for layer in self.network if isinstance(layer, ActMixLayer)
-        ]
+        self._actmix_layers = nn.ModuleList(actmix_layers)
+
+    @property
+    def num_actmix_layers(self) -> int:
+        return len(self._actmix_layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.network(x)
 
     def set_temperature(self, temperature: float) -> None:
-        for layer in self.actmix_layers:
+        for layer in self._actmix_layers:
             layer.set_temperature(temperature)
 
     def compute_total_entropy(self) -> torch.Tensor:
-        entropies = [layer.compute_entropy() for layer in self.actmix_layers]
-        return torch.stack(entropies).mean()
+        entropies = torch.stack(
+            [layer.compute_entropy() for layer in self._actmix_layers]
+        )
+        return entropies.mean()
 
     def get_all_mixing_coefficients(self) -> list[torch.Tensor]:
-        return [layer.get_mixing_coefficients() for layer in self.actmix_layers]
+        return [layer.get_mixing_coefficients() for layer in self._actmix_layers]

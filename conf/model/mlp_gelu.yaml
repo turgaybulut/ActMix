@@ -1,6 +1,5 @@
 name: mlp_gelu
-
-_target_: src.models.baselines.GeLUMLP
+activation: gelu
 
 hidden_dims:
   - 128

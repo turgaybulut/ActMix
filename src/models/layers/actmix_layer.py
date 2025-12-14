@@ -11,13 +11,16 @@ class ActMixLayer(nn.Module):
         "tanh": torch.tanh,
         "relu": F.relu,
         "identity": lambda x: x,
+        "sigmoid": torch.sigmoid,
+        "silu": F.silu,
     }
 
     def __init__(
         self,
         num_features: int,
-        basis_functions: list[str] = None,
+        basis_functions: list[str] | None = None,
         relu_bias: float = 1.5,
+        omega_0: float = 1.0,
     ) -> None:
         super().__init__()
 
@@ -29,24 +32,25 @@ class ActMixLayer(nn.Module):
             "identity",
         ]
         self.num_basis = len(self.basis_function_names)
+        self.omega_0 = omega_0
 
-        assert all(name in self.BASIS_FUNCTIONS for name in self.basis_function_names)
+        self._validate_basis_functions()
 
-        self.basis_fns = [
-            self.BASIS_FUNCTIONS[name] for name in self.basis_function_names
-        ]
-
-        self.mixing_weights = nn.Parameter(torch.zeros(num_features, self.num_basis))
-        self._initialize_weights(relu_bias)
+        self.mixing_logits = nn.Parameter(torch.zeros(num_features, self.num_basis))
+        self._initialize_mixing_logits(relu_bias)
 
         self.register_buffer("temperature", torch.tensor(1.0))
 
-    def _initialize_weights(self, relu_bias: float) -> None:
+    def _validate_basis_functions(self) -> None:
+        for name in self.basis_function_names:
+            assert name in self.BASIS_FUNCTIONS, f"Unknown basis function: {name}"
+
+    def _initialize_mixing_logits(self, relu_bias: float) -> None:
         with torch.no_grad():
-            self.mixing_weights.zero_()
-            relu_index = self._get_basis_index("relu")
-            if relu_index is not None and relu_bias != 0.0:
-                self.mixing_weights[:, relu_index].fill_(relu_bias)
+            self.mixing_logits.zero_()
+            relu_idx = self._get_basis_index("relu")
+            if relu_idx is not None and relu_bias != 0.0:
+                self.mixing_logits[:, relu_idx].fill_(relu_bias)
 
     def _get_basis_index(self, name: str) -> int | None:
         try:
@@ -58,19 +62,28 @@ class ActMixLayer(nn.Module):
         self.temperature.fill_(temperature)
 
     def get_mixing_coefficients(self) -> torch.Tensor:
-        return F.softmax(self.mixing_weights / self.temperature, dim=-1)
+        return F.softmax(self.mixing_logits / self.temperature, dim=-1)
+
+    def _get_log_mixing_coefficients(self) -> torch.Tensor:
+        return F.log_softmax(self.mixing_logits / self.temperature, dim=-1)
 
     def compute_entropy(self) -> torch.Tensor:
+        log_alpha = self._get_log_mixing_coefficients()
         alpha = self.get_mixing_coefficients()
-        log_alpha = torch.log(alpha + 1e-10)
         entropy = -torch.sum(alpha * log_alpha, dim=-1)
         return entropy.mean()
+
+    def _apply_basis_function(self, x: torch.Tensor, name: str) -> torch.Tensor:
+        if name == "sin":
+            return torch.sin(self.omega_0 * x)
+        return self.BASIS_FUNCTIONS[name](x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         alpha = self.get_mixing_coefficients()
 
-        basis_outputs = torch.stack([fn(x) for fn in self.basis_fns], dim=-1)
+        basis_outputs = torch.stack(
+            [self._apply_basis_function(x, name) for name in self.basis_function_names],
+            dim=-1,
+        )
 
-        output = torch.sum(basis_outputs * alpha, dim=-1)
-
-        return output
+        return torch.sum(basis_outputs * alpha, dim=-1)

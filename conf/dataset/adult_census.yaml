@@ -1,7 +1,5 @@
 name: adult_census
 
-_target_: src.datamodules.uci_classification.AdultCensusDataModule
-
 batch_size: 128
 num_workers: 2
 val_split: 0.10
