@@ -64,6 +64,7 @@ class ActMixModelConfig:
 @dataclass
 class StaticMLPModelConfig:
     name: str = "mlp_relu"
+    activation: str = "relu"
     hidden_dims: list[int] = field(default_factory=lambda: [128, 128])
     dropout_rate: float = 0.1
 
@@ -82,6 +83,6 @@ class ExperimentConfig:
     experiment_name: str = ""
     cv_folds: int = 10
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
-    model: Any = field(default_factory=ActMixModelConfig)
+    model: Any = field(default_factory=dict)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
