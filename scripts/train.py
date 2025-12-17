@@ -30,6 +30,7 @@ def create_datamodule(cfg: DictConfig) -> L.LightningDataModule:
         val_split=cfg.dataset.val_split,
         test_split=cfg.dataset.test_split,
         seed=cfg.seed,
+        pin_memory=cfg.dataset.pin_memory,
     )
 
 
@@ -72,6 +73,7 @@ def create_tabular_trainer(
         num_classes=cfg.dataset.output_dim,
         learning_rate=cfg.training.learning_rate,
         weight_decay=cfg.training.weight_decay,
+        eta_min_factor=cfg.training.scheduler.eta_min_factor,
         temperature_initial=cfg.training.temperature.initial if is_actmix else 1.0,
         temperature_final=cfg.training.temperature.final if is_actmix else 1.0,
         temperature_anneal_epochs=cfg.training.temperature.anneal_epochs
@@ -129,9 +131,11 @@ def create_lightning_trainer(
         callbacks=callbacks,
         logger=logger,
         gradient_clip_val=cfg.training.gradient_clip_val,
-        deterministic=True,
-        accelerator="auto",
-        devices="auto",
+        deterministic=cfg.training.deterministic,
+        accelerator=cfg.training.distributed.accelerator,
+        devices=cfg.training.distributed.devices,
+        strategy=cfg.training.distributed.strategy,
+        enable_model_summary=False,
     )
 
 

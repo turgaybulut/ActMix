@@ -23,30 +23,47 @@ class EarlyStoppingConfig:
 
 
 @dataclass
+class DistributedConfig:
+    accelerator: str = "auto"
+    devices: int | str = "auto"
+    strategy: str = "auto"
+
+
+@dataclass
+class SchedulerConfig:
+    name: str = "cosine"
+    eta_min_factor: float = 0.01
+
+
+@dataclass
 class TrainingConfig:
     seed: int = 1192
     max_epochs: int = 200
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
     gradient_clip_val: float = 0.5
+    deterministic: bool = True
     temperature: TemperatureConfig = field(default_factory=TemperatureConfig)
     entropy_regularization: EntropyRegularizationConfig = field(
         default_factory=EntropyRegularizationConfig
     )
     early_stopping: EarlyStoppingConfig = field(default_factory=EarlyStoppingConfig)
+    distributed: DistributedConfig = field(default_factory=DistributedConfig)
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
 
 
 @dataclass
 class DatasetConfig:
     name: str = ""
+    task: str = ""
+    input_dim: int = 0
+    output_dim: int = 0
     batch_size: int = 128
     num_workers: int = 2
     val_split: float = 0.10
     test_split: float = 0.10
     seed: int = 1192
-    task: str = ""
-    input_dim: int = 0
-    output_dim: int = 0
+    pin_memory: bool = True
 
 
 @dataclass

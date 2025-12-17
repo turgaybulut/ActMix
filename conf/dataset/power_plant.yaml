@@ -1,11 +1,11 @@
 name: power_plant
+task: regression
+input_dim: 4
+output_dim: 1
 
 batch_size: 128
 num_workers: 2
 val_split: 0.10
 test_split: 0.10
 seed: ${seed}
-
-task: regression
-input_dim: 4
-output_dim: 1
+pin_memory: true

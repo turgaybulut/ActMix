@@ -33,6 +33,7 @@ class BaseTabularDataModule(L.LightningDataModule, ABC):
         val_split: float = 0.10,
         test_split: float = 0.10,
         seed: int = 1192,
+        pin_memory: bool = True,
     ) -> None:
         super().__init__()
 
@@ -41,6 +42,7 @@ class BaseTabularDataModule(L.LightningDataModule, ABC):
         self.val_split = val_split
         self.test_split = test_split
         self.seed = seed
+        self.pin_memory = pin_memory
 
         self.feature_scaler = StandardScaler()
 
@@ -76,7 +78,7 @@ class BaseTabularDataModule(L.LightningDataModule, ABC):
             batch_size=self.batch_size,
             shuffle=shuffle,
             num_workers=self.num_workers,
-            pin_memory=True,
+            pin_memory=self.pin_memory,
             persistent_workers=self.num_workers > 0,
         )
 
