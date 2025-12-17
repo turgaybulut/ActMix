@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 from omegaconf import OmegaConf
 
+from src.datamodules import DATAMODULE_REGISTRY
 from src.models import ActMixMLP
 from src.models.layers import ActMixLayer
 from src.trainer import TabularTrainer
@@ -31,6 +32,21 @@ def create_model_from_config(config: dict) -> ActMixMLP:
         relu_bias=model_conf.get("relu_bias", 1.5),
         omega_0=model_conf.get("omega_0", 1.0),
     )
+
+
+def get_datamodule_dims(config: dict) -> tuple[int, int]:
+    datamodule_cls = DATAMODULE_REGISTRY[config.dataset.name]
+    datamodule = datamodule_cls(
+        batch_size=config.dataset.batch_size,
+        num_workers=config.dataset.num_workers,
+        val_split=config.dataset.val_split,
+        test_split=config.dataset.test_split,
+        seed=config.seed,
+        pin_memory=config.dataset.pin_memory,
+    )
+    datamodule.prepare_data()
+    datamodule.setup()
+    return datamodule.input_dim, datamodule.output_dim
 
 
 def load_model_from_checkpoint(checkpoint_path: Path) -> ActMixMLP:
@@ -58,6 +74,8 @@ def load_model_from_checkpoint(checkpoint_path: Path) -> ActMixMLP:
     )
 
     config = load_config(config_path)
+    config.dataset.input_dim, config.dataset.output_dim = get_datamodule_dims(config)
+
     model = create_model_from_config(config)
 
     trainer = TabularTrainer.load_from_checkpoint(str(checkpoint_path), model=model)
