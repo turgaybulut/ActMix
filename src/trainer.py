@@ -83,41 +83,28 @@ class TabularTrainer(L.LightningModule):
         predictions: torch.Tensor,
         targets: torch.Tensor,
     ) -> None:
-        self._epoch_predictions[stage].append(predictions.detach())
-        self._epoch_targets[stage].append(targets.detach())
+        self._epoch_predictions[stage].append(predictions.detach().cpu())
+        self._epoch_targets[stage].append(targets.detach().cpu())
 
-    def _gather_and_compute_metrics(self, stage: str) -> None:
-        local_predictions = torch.cat(self._epoch_predictions[stage], dim=0)
-        local_targets = torch.cat(self._epoch_targets[stage], dim=0)
+    def _compute_and_log_epoch_metrics(self, stage: str) -> None:
+        if not self._epoch_predictions[stage]:
+            return
 
-        if self.trainer.world_size > 1:
-            gathered_predictions = self.all_gather(local_predictions)
-            gathered_targets = self.all_gather(local_targets)
+        predictions = torch.cat(self._epoch_predictions[stage], dim=0)
+        targets = torch.cat(self._epoch_targets[stage], dim=0)
 
-            gathered_predictions = gathered_predictions.view(
-                -1, *local_predictions.shape[1:]
+        metrics = compute_metrics(self.task, predictions, targets, self.num_classes)
+
+        for name, value in metrics.items():
+            is_primary = name == self.primary_metric
+            if isinstance(value, torch.Tensor):
+                value = value.to(self.device)
+            self.log(
+                f"{stage}_{name}",
+                value,
+                prog_bar=is_primary,
+                sync_dist=True,
             )
-            gathered_targets = gathered_targets.view(-1, *local_targets.shape[1:])
-        else:
-            gathered_predictions = local_predictions
-            gathered_targets = local_targets
-
-        if self.trainer.is_global_zero:
-            metrics = compute_metrics(
-                self.task,
-                gathered_predictions.cpu(),
-                gathered_targets.cpu(),
-                self.num_classes,
-            )
-
-            for name, value in metrics.items():
-                is_primary = name == self.primary_metric
-                self.log(
-                    f"{stage}_{name}",
-                    value,
-                    prog_bar=is_primary,
-                    rank_zero_only=True,
-                )
 
         self._epoch_predictions[stage].clear()
         self._epoch_targets[stage].clear()
@@ -166,7 +153,7 @@ class TabularTrainer(L.LightningModule):
         return total_loss
 
     def on_train_epoch_end(self) -> None:
-        self._gather_and_compute_metrics("train")
+        self._compute_and_log_epoch_metrics("train")
 
     def validation_step(self, batch: tuple, batch_idx: int) -> None:
         features, targets = batch
@@ -180,7 +167,7 @@ class TabularTrainer(L.LightningModule):
         self._accumulate_predictions("val", predictions, targets)
 
     def on_validation_epoch_end(self) -> None:
-        self._gather_and_compute_metrics("val")
+        self._compute_and_log_epoch_metrics("val")
 
     def test_step(self, batch: tuple, batch_idx: int) -> None:
         features, targets = batch
@@ -194,7 +181,7 @@ class TabularTrainer(L.LightningModule):
         self._accumulate_predictions("test", predictions, targets)
 
     def on_test_epoch_end(self) -> None:
-        self._gather_and_compute_metrics("test")
+        self._compute_and_log_epoch_metrics("test")
 
     def configure_optimizers(self) -> dict[str, Any]:
         optimizer = torch.optim.AdamW(
