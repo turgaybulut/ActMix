@@ -66,6 +66,7 @@ def create_tabular_trainer(
         num_classes=cfg.dataset.output_dim,
         learning_rate=cfg.training.learning_rate,
         weight_decay=cfg.training.weight_decay,
+        eta_min_factor=cfg.training.scheduler.eta_min_factor,
         temperature_initial=cfg.training.temperature.initial if is_actmix else 1.0,
         temperature_final=cfg.training.temperature.final if is_actmix else 1.0,
         temperature_anneal_epochs=cfg.training.temperature.anneal_epochs
@@ -126,9 +127,11 @@ def create_lightning_trainer(
         callbacks=callbacks,
         logger=logger,
         gradient_clip_val=cfg.training.gradient_clip_val,
-        deterministic=True,
-        accelerator="auto",
-        devices="auto",
+        deterministic=cfg.training.deterministic,
+        accelerator=cfg.training.distributed.accelerator,
+        devices=cfg.training.distributed.devices,
+        strategy=cfg.training.distributed.strategy,
+        enable_model_summary=False,
     )
 
 
@@ -183,7 +186,7 @@ def train_dataset_to_loader(
         batch_size=cfg.dataset.batch_size,
         shuffle=shuffle,
         num_workers=cfg.dataset.num_workers,
-        pin_memory=True,
+        pin_memory=cfg.dataset.pin_memory,
         persistent_workers=cfg.dataset.num_workers > 0,
     )
 
@@ -272,6 +275,7 @@ def main(cfg: ExperimentConfig) -> None:
         val_split=0.0,
         test_split=0.0,
         seed=cfg.seed,
+        pin_memory=cfg.dataset.pin_memory,
     )
     datamodule.prepare_data()
     datamodule.setup()

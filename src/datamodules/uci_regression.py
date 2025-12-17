@@ -17,6 +17,7 @@ class PowerPlantDataModule(BaseTabularDataModule):
         val_split: float = 0.10,
         test_split: float = 0.10,
         seed: int = 1192,
+        pin_memory: bool = True,
     ) -> None:
         super().__init__(
             batch_size=batch_size,
@@ -24,6 +25,7 @@ class PowerPlantDataModule(BaseTabularDataModule):
             val_split=val_split,
             test_split=test_split,
             seed=seed,
+            pin_memory=pin_memory,
         )
         self._input_dim = 4
         self._output_dim = 1

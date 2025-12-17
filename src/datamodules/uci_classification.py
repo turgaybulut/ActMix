@@ -39,6 +39,7 @@ class AdultCensusDataModule(BaseTabularDataModule):
         val_split: float = 0.10,
         test_split: float = 0.10,
         seed: int = 1192,
+        pin_memory: bool = True,
     ) -> None:
         super().__init__(
             batch_size=batch_size,
@@ -46,6 +47,7 @@ class AdultCensusDataModule(BaseTabularDataModule):
             val_split=val_split,
             test_split=test_split,
             seed=seed,
+            pin_memory=pin_memory,
         )
         self.one_hot_encoder: OneHotEncoder | None = None
         self._output_dim = 2
@@ -214,6 +216,7 @@ class MagicGammaDataModule(BaseTabularDataModule):
         val_split: float = 0.10,
         test_split: float = 0.10,
         seed: int = 1192,
+        pin_memory: bool = True,
     ) -> None:
         super().__init__(
             batch_size=batch_size,
@@ -221,6 +224,7 @@ class MagicGammaDataModule(BaseTabularDataModule):
             val_split=val_split,
             test_split=test_split,
             seed=seed,
+            pin_memory=pin_memory,
         )
         self.label_encoder = LabelEncoder()
         self._input_dim = 10

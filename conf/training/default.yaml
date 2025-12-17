@@ -2,6 +2,8 @@ seed: ${seed}
 max_epochs: 200
 learning_rate: 1.0e-3
 weight_decay: 1.0e-4
+gradient_clip_val: 0.5
+deterministic: true
 
 temperature:
   initial: 1.0
@@ -17,4 +19,11 @@ early_stopping:
   monitor: val_loss
   mode: min
 
-gradient_clip_val: 0.5
+distributed:
+  accelerator: auto
+  devices: auto
+  strategy: auto
+
+scheduler:
+  name: cosine
+  eta_min_factor: 0.01

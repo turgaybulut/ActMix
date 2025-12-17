@@ -1,11 +1,11 @@
 name: magic_gamma
+task: classification
+input_dim: 10
+output_dim: 2
 
 batch_size: 128
 num_workers: 2
 val_split: 0.10
 test_split: 0.10
 seed: ${seed}
-
-task: classification
-input_dim: 10
-output_dim: 2
+pin_memory: true
