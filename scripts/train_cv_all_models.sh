@@ -19,6 +19,7 @@ show_usage() {
     echo -e "${YELLOW}Example: $0 power_plant${NC}"
     echo -e "${YELLOW}Example: $0 adult_census cv_folds=5${NC}"
     echo -e "${YELLOW}Example: $0 power_plant training.learning_rate=0.0005 training.max_epochs=300${NC}"
+    echo -e "${YELLOW}Example: PARALLEL=true $0 power_plant  # Run models in parallel${NC}"
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -45,17 +46,39 @@ echo -e "${CYAN}Starting Cross-Validation pipeline for all models with $DATASET 
 echo -e "${BLUE}Models to evaluate: ${MODELS[*]}${NC}"
 echo -e "${YELLOW}=======================================================================================${NC}"
 
-for model in "${MODELS[@]}"; do
-    echo -e "${BLUE}Running ${YELLOW}$model${BLUE} Cross-Validation on $DATASET...${NC}"
+if [[ "${PARALLEL:-false}" == "true" ]]; then
+    echo -e "${YELLOW}Running models in parallel...${NC}"
 
-    uv run python "$PROJECT_ROOT/scripts/train_cv.py" \
-        dataset="$DATASET" \
-        model="$model" \
-        seed=1192 \
-        $EXTRA_ARGS
+    pids=()
+    for model in "${MODELS[@]}"; do
+        echo -e "${BLUE}Starting ${YELLOW}$model${BLUE} Cross-Validation on $DATASET...${NC}"
 
-    echo -e "${GREEN}Completed $model CV.${NC}"
-    echo -e "${YELLOW}=======================================================================================${NC}"
-done
+        uv run python "$PROJECT_ROOT/scripts/train_cv.py" \
+            dataset="$DATASET" \
+            model="$model" \
+            seed=1192 \
+            $EXTRA_ARGS &
+
+        pids+=($!)
+    done
+
+    for pid in "${pids[@]}"; do
+        wait "$pid"
+        echo -e "${GREEN}Completed model training (PID: $pid)${NC}"
+    done
+else
+    for model in "${MODELS[@]}"; do
+        echo -e "${BLUE}Running ${YELLOW}$model${BLUE} Cross-Validation on $DATASET...${NC}"
+
+        uv run python "$PROJECT_ROOT/scripts/train_cv.py" \
+            dataset="$DATASET" \
+            model="$model" \
+            seed=1192 \
+            $EXTRA_ARGS
+
+        echo -e "${GREEN}Completed $model CV.${NC}"
+        echo -e "${YELLOW}=======================================================================================${NC}"
+    done
+fi
 
 echo -e "${GREEN}All models evaluated successfully with $DATASET dataset.${NC}"
