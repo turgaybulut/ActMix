@@ -23,9 +23,12 @@ from src.datamodules.uci_classification import (
 )
 from src.datamodules.uci_regression import PowerPlantDataModule
 
+SEED = 1192
+N_FOLDS = 10
+
 
 def get_all_data(datamodule_cls: Any) -> tuple[np.ndarray, np.ndarray]:
-    datamodule = datamodule_cls(val_split=0.0, test_split=0.0, seed=42)
+    datamodule = datamodule_cls(val_split=0.0, test_split=0.0, seed=SEED)
     datamodule.prepare_data()
     datamodule.setup()
 
@@ -35,54 +38,79 @@ def get_all_data(datamodule_cls: Any) -> tuple[np.ndarray, np.ndarray]:
     return X, y
 
 
-def evaluate_model(
-    model: Any, X_test: np.ndarray, y_test: np.ndarray, task: str
-) -> dict[str, float]:
-    preds = model.predict(X_test)
+def evaluate_classification(y_test: np.ndarray, preds: np.ndarray) -> dict[str, float]:
+    return {
+        "test_accuracy": float(accuracy_score(y_test, preds)),
+        "test_f1": float(f1_score(y_test, preds, average="macro")),
+        "test_precision": float(precision_score(y_test, preds, average="macro")),
+        "test_recall": float(recall_score(y_test, preds, average="macro")),
+    }
 
-    if task == "classification":
-        return {
-            "accuracy": float(accuracy_score(y_test, preds)),
-            "f1": float(f1_score(y_test, preds, average="macro")),
-            "precision": float(precision_score(y_test, preds, average="macro")),
-            "recall": float(recall_score(y_test, preds, average="macro")),
-        }
 
+def evaluate_regression(y_test: np.ndarray, preds: np.ndarray) -> dict[str, float]:
     mse = mean_squared_error(y_test, preds)
     return {
-        "mse": float(mse),
-        "mae": float(mean_absolute_error(y_test, preds)),
-        "rmse": float(np.sqrt(mse)),
-        "r2": float(r2_score(y_test, preds)),
-        "pearson": float(pearsonr(y_test.flatten(), preds.flatten())[0]),
-        "spearman": float(spearmanr(y_test.flatten(), preds.flatten())[0]),
+        "test_mse": float(mse),
+        "test_mae": float(mean_absolute_error(y_test, preds)),
+        "test_rmse": float(np.sqrt(mse)),
+        "test_r2": float(r2_score(y_test, preds)),
+        "test_pearson": float(pearsonr(y_test.flatten(), preds.flatten())[0]),
+        "test_spearman": float(spearmanr(y_test.flatten(), preds.flatten())[0]),
     }
+
+
+def aggregate_results(
+    fold_results: list[dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    all_metrics: dict[str, list[float]] = {}
+
+    for fold_result in fold_results:
+        for metric_name, value in fold_result.items():
+            if metric_name not in all_metrics:
+                all_metrics[metric_name] = []
+            all_metrics[metric_name].append(value)
+
+    aggregated = {}
+    for metric_name, values in all_metrics.items():
+        aggregated[metric_name] = {
+            "mean": float(np.mean(values)),
+            "std": float(np.std(values)),
+            "min": float(np.min(values)),
+            "max": float(np.max(values)),
+            "values": values,
+        }
+
+    return aggregated
 
 
 def run_cv_benchmark(
     name: str,
     datamodule_cls: Any,
     task: str,
-    params: dict[str, Any] = None,
-    n_folds: int = 10,
-) -> dict[str, dict[str, float]]:
-    import xgboost as xgb  # Lazy import to avoid OpenMP conflicts with Torch
+    params: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, float]], dict[str, dict[str, float]]]:
+    import xgboost as xgb
 
-    print(f"Loading data for {name}...")
+    console = Console()
+    console.print(f"\n[bold cyan]{'=' * 60}[/bold cyan]")
+    console.print(f"[bold cyan]Dataset: {name}[/bold cyan]")
+    console.print(f"[bold cyan]{'=' * 60}[/bold cyan]\n")
+
     X, y = get_all_data(datamodule_cls)
-    print(f"Data loaded for {name}. Shape: {X.shape}, {y.shape}")
+    console.print(f"Data shape: X={X.shape}, y={y.shape}")
 
     if task == "classification":
-        kfold = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+        kfold = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=SEED)
         splits = kfold.split(X, y)
     else:
-        kfold = KFold(n_splits=n_folds, shuffle=True, random_state=42)
+        kfold = KFold(n_splits=N_FOLDS, shuffle=True, random_state=SEED)
         splits = kfold.split(X)
 
-    fold_metrics: list[dict[str, float]] = []
+    fold_results: list[dict[str, float]] = []
 
-    for i, (train_idx, test_idx) in enumerate(splits):
-        print(f"Running fold {i + 1}/{n_folds}...")
+    for fold_idx, (train_idx, test_idx) in enumerate(splits):
+        console.print(f"Running fold {fold_idx + 1}/{N_FOLDS}...")
+
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
 
@@ -93,88 +121,111 @@ def run_cv_benchmark(
                 max_depth=6,
                 use_label_encoder=False,
                 eval_metric="logloss",
+                random_state=SEED,
                 n_jobs=-1,
-                **(params if params else {}),
+                **(params or {}),
             )
         else:
             model = xgb.XGBRegressor(
                 n_estimators=500,
                 learning_rate=0.05,
                 max_depth=6,
+                random_state=SEED,
                 n_jobs=-1,
-                **(params if params else {}),
+                **(params or {}),
             )
 
         model.fit(X_train, y_train)
-        fold_metrics.append(evaluate_model(model, X_test, y_test, task))
+        preds = model.predict(X_test)
 
-    aggregated = {}
-    for key in fold_metrics[0].keys():
-        values = [m[key] for m in fold_metrics]
-        aggregated[key] = {
-            "mean": float(np.mean(values)),
-            "std": float(np.std(values)),
-            "min": float(np.min(values)),
-            "max": float(np.max(values)),
-        }
+        if task == "classification":
+            metrics = evaluate_classification(y_test, preds)
+        else:
+            metrics = evaluate_regression(y_test, preds)
 
-    return aggregated
+        fold_results.append(metrics)
+
+    aggregated = aggregate_results(fold_results)
+    return fold_results, aggregated
+
+
+def save_cv_results(
+    output_dir: Path,
+    dataset_name: str,
+    fold_results: list[dict[str, float]],
+    aggregated: dict[str, dict[str, float]],
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    results_payload = {
+        "model": "xgboost",
+        "dataset": dataset_name,
+        "seed": SEED,
+        "n_folds": N_FOLDS,
+        "fold_results": fold_results,
+        "aggregated": aggregated,
+    }
+
+    results_file = output_dir / "cv_results.json"
+    with open(results_file, "w") as f:
+        json.dump(results_payload, f, indent=2)
+
+
+def print_results_table(
+    aggregated: dict[str, dict[str, float]],
+    dataset_name: str,
+) -> None:
+    console = Console()
+
+    table = Table(title=f"XGBoost {N_FOLDS}-Fold CV Results: {dataset_name}")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Mean ± Std", style="green")
+    table.add_column("Min", style="yellow")
+    table.add_column("Max", style="yellow")
+
+    for metric_name, stats in aggregated.items():
+        table.add_row(
+            metric_name,
+            f"{stats['mean']:.4f} ± {stats['std']:.4f}",
+            f"{stats['min']:.4f}",
+            f"{stats['max']:.4f}",
+        )
+
+    console.print(table)
 
 
 def main():
     benchmarks = [
-        ("Power Plant", PowerPlantDataModule, "regression", {}),
-        ("Magic Gamma", MagicGammaDataModule, "classification", {}),
+        ("power_plant", PowerPlantDataModule, "regression", None),
+        ("magic_gamma", MagicGammaDataModule, "classification", None),
         (
-            "Adult Census",
+            "adult_census",
             AdultCensusDataModule,
             "classification",
             {"enable_categorical": True},
         ),
     ]
 
-    results = {}
+    base_output_dir = Path("experiments/xgboost_baselines")
     console = Console()
 
-    table = Table(title="XGBoost 10-Fold CV Benchmark Results")
-    table.add_column("Dataset", style="cyan")
-    table.add_column("Task", style="magenta")
-    table.add_column("Metric", style="green")
-    table.add_column("Mean ± Std", style="yellow")
-
-    for name, dm_cls, task, params in benchmarks:
+    for dataset_name, dm_cls, task, params in benchmarks:
         try:
-            metrics = run_cv_benchmark(name, dm_cls, task, params)
-            results[name] = metrics
+            fold_results, aggregated = run_cv_benchmark(
+                dataset_name, dm_cls, task, params
+            )
 
-            if task == "classification":
-                row_metrics = ["accuracy", "f1", "precision", "recall"]
-                names = ["Accuracy", "F1", "Precision", "Recall"]
-            else:
-                row_metrics = ["rmse", "mse", "mae", "r2", "pearson", "spearman"]
-                names = ["RMSE", "MSE", "MAE", "R2", "Pearson", "Spearman"]
+            print_results_table(aggregated, dataset_name)
 
-            for i, (key, display_name) in enumerate(zip(row_metrics, names)):
-                m = metrics[key]
-                val_str = f"{m['mean']:.4f} ± {m['std']:.4f}"
-                if i == 0:
-                    table.add_row(name, task, display_name, val_str)
-                else:
-                    table.add_row("", "", display_name, val_str)
+            output_dir = base_output_dir / f"xgboost-{dataset_name}"
+            save_cv_results(output_dir, dataset_name, fold_results, aggregated)
+
+            results_path = output_dir / "cv_results.json"
+            console.print(f"[green]Results saved to {results_path}[/green]\n")
 
         except Exception as e:
-            console.print(f"[red]Failed to run benchmark for {name}: {e}[/red]")
-            table.add_row(name, task, "Error", str(e))
-
-    console.print(table)
-
-    output_dir = Path("experiments/xgboost_baselines")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    with open(output_dir / "results.json", "w") as f:
-        json.dump(results, f, indent=2)
-
-    print(f"Results saved to {output_dir / 'results.json'}")
+            console.print(f"[red]Failed for {dataset_name}: {e}[/red]")
+            raise
 
 
 if __name__ == "__main__":
