@@ -2,6 +2,8 @@
 
 ActMix is a novel deep learning architecture designed to recover tabular inductive bias through adaptive activation topology. Unlike static activation functions that impose homogeneous geometric transformations, ActMix enables each neuron to learn its own convex combination of topologically distinct basis functions (Sine, Tanh, ReLU, Identity).
 
+For full technical details, please see the included paper: [ActMix.pdf](ActMix.pdf).
+
 ## Key Features
 
 - **Neuron-wise Activation Mixing**: Each neuron learns its own weighted combination of basis functions
